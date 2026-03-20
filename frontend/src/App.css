@@ -20,6 +20,9 @@
   --ocr-color: #f59e0b;
   --ocr-bg: rgba(245, 158, 11, 0.1);
   --ocr-border: rgba(245, 158, 11, 0.25);
+  --master-color: #38bdf8;
+  --master-bg: rgba(56, 189, 248, 0.1);
+  --master-border: rgba(56, 189, 248, 0.25);
   --danger: #ef4444;
   --diff-match: transparent;
   --diff-changed-bg: rgba(245, 158, 11, 0.08);
@@ -304,6 +307,10 @@ body {
   background: var(--border);
 }
 
+.split.split-three {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
 /* ------------------------------------------------------------------ */
 /* Result Panel                                                        */
 /* ------------------------------------------------------------------ */
@@ -341,6 +348,7 @@ body {
 
 .method-dot.vlm { background: var(--vlm-color); }
 .method-dot.ocr { background: var(--ocr-color); }
+.method-dot.master { background: var(--master-color); }
 
 .panel-header-right {
   display: flex;
@@ -369,6 +377,12 @@ body {
   background: var(--ocr-bg);
   color: var(--ocr-color);
   border: 1px solid var(--ocr-border);
+}
+
+.time-badge.master {
+  background: var(--master-bg);
+  color: var(--master-color);
+  border: 1px solid var(--master-border);
 }
 
 .time-badge svg {

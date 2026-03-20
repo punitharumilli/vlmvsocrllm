@@ -108,9 +108,10 @@ function renderJson(value, diffMap, compareWith, currentPath = '', indent = 0) {
   return <span>{formatted}</span>
 }
 
-export default function ResultPanel({ title, result, timeMs, error, ocrText, variant, compareWith, inputTokens, outputTokens }) {
+export default function ResultPanel({ title, result, xmlOutput, timeMs, error, ocrText, variant, compareWith, inputTokens, outputTokens, showMetrics = true }) {
   const [showOcr, setShowOcr] = useState(false)
-  const dotClass = variant === 'vlm' ? 'vlm' : 'ocr'
+  const [showJson, setShowJson] = useState(false)
+  const dotClass = variant === 'vlm' ? 'vlm' : variant === 'master' ? 'master' : 'ocr'
 
   // Compute which paths differ and what the other side's value is
   const diffMap = useMemo(() => {
@@ -134,14 +135,24 @@ export default function ResultPanel({ title, result, timeMs, error, ocrText, var
               {showOcr ? 'Show JSON' : 'Show OCR Text'}
             </button>
           )}
-          <span className={`time-badge ${dotClass}`}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10" />
-              <polyline points="12 6 12 12 16 14" />
-            </svg>
-            {timeMs ? `${(timeMs / 1000).toFixed(1)}s` : '--'}
-          </span>
-          {(inputTokens > 0 || outputTokens > 0) && (
+          {xmlOutput && !showOcr && (
+            <button
+              className={`toggle-ocr-btn ${showJson ? 'active' : ''}`}
+              onClick={() => setShowJson(!showJson)}
+            >
+              {showJson ? 'Show XML' : 'Show JSON'}
+            </button>
+          )}
+          {showMetrics && (
+            <span className={`time-badge ${dotClass}`}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
+              {timeMs ? `${(timeMs / 1000).toFixed(1)}s` : '--'}
+            </span>
+          )}
+          {showMetrics && (inputTokens > 0 || outputTokens > 0) && (
             <span className="token-badge">
               In: {inputTokens.toLocaleString()} | Out: {outputTokens.toLocaleString()}
             </span>
@@ -156,6 +167,8 @@ export default function ResultPanel({ title, result, timeMs, error, ocrText, var
       <div className="panel-body">
         {showOcr ? (
           <pre className="ocr-text">{ocrText}</pre>
+        ) : (!showJson && xmlOutput) ? (
+          <pre className="ocr-text">{xmlOutput}</pre>
         ) : (
           <pre className="json-output">
             {result

@@ -1,36 +1,6 @@
 import { useMemo } from 'react'
 import { computeWordDiff } from '../utils/jsonDiff.js'
-
-/**
- * Flatten a nested object/array into dot-notation key-value pairs.
- */
-function flattenObject(obj, prefix = '') {
-  const result = {}
-  if (obj == null) return result
-
-  for (const [key, val] of Object.entries(obj)) {
-    const path = prefix ? `${prefix}.${key}` : key
-
-    if (Array.isArray(val)) {
-      val.forEach((item, i) => {
-        if (item != null && typeof item === 'object') {
-          Object.assign(result, flattenObject(item, `${path}[${i}]`))
-        } else {
-          result[`${path}[${i}]`] = String(item ?? '')
-        }
-      })
-    } else if (val != null && typeof val === 'object') {
-      Object.assign(result, flattenObject(val, path))
-    } else {
-      result[path] = String(val ?? '')
-    }
-  }
-  return result
-}
-
-function isCoordinateField(key) {
-  return /\b(fieldCoordinates|sectionCoordinates)\b/.test(key)
-}
+import { parseXmlPoints } from '../utils/xmlCompare.js'
 
 /**
  * Render word-diff segments as React elements with highlights.
@@ -46,78 +16,77 @@ function renderSegments(segments) {
 /**
  * Render a cell value with word-level highlighting against the other side.
  */
-function DiffCell({ value, otherValue, status }) {
+function DiffCell({ value, masterValue, status }) {
   if (!value) return <span className="diff-empty">--</span>
 
-  if (status === 'changed' && otherValue) {
-    const segments = computeWordDiff(value, otherValue)
+  if (status === 'wrong' && masterValue) {
+    const segments = computeWordDiff(value, masterValue)
     return <span>{renderSegments(segments)}</span>
   }
 
-  // vlm-only / ocr-only: highlight the whole thing
-  if (status === 'vlm-only' || status === 'ocr-only') {
+  if (status === 'missing') {
     return <mark className="diff-highlight">{value}</mark>
   }
 
   return <span>{value}</span>
 }
 
-export default function DiffView({ vlmResult, ocrLlmResult }) {
+export default function DiffView({ masterXml, vlmXml, ocrXml }) {
   const { rows, stats } = useMemo(() => {
-    const vlmFlat = flattenObject(vlmResult)
-    const ocrFlat = flattenObject(ocrLlmResult)
+    const master = parseXmlPoints(masterXml || '')
+    const vlm = parseXmlPoints(vlmXml || '')
+    const ocr = parseXmlPoints(ocrXml || '')
 
-    const allKeys = [
-      ...new Set([...Object.keys(vlmFlat), ...Object.keys(ocrFlat)])
-    ]
-      .filter(k => !isCoordinateField(k))
-      .sort()
+    const masterKeys = Object.keys(master).sort()
 
-    let matchCount = 0
-    let changedCount = 0
-    let vlmOnlyCount = 0
-    let ocrOnlyCount = 0
+    let vlmCorrect = 0
+    let vlmWrong = 0
+    let ocrCorrect = 0
+    let ocrWrong = 0
 
-    const rows = allKeys.map(key => {
-      const vVal = vlmFlat[key]
-      const oVal = ocrFlat[key]
-      let status
+    const rows = masterKeys.map((key) => {
+      const mVal = master[key] ?? ''
+      const vVal = vlm[key] ?? ''
+      const oVal = ocr[key] ?? ''
 
-      if (vVal === undefined) {
-        status = 'ocr-only'
-        ocrOnlyCount++
-      } else if (oVal === undefined) {
-        status = 'vlm-only'
-        vlmOnlyCount++
-      } else if (vVal === oVal) {
-        status = 'match'
-        matchCount++
-      } else {
-        status = 'changed'
-        changedCount++
-      }
+      const vlmStatus = vVal === mVal ? 'match' : (vVal ? 'wrong' : 'missing')
+      const ocrStatus = oVal === mVal ? 'match' : (oVal ? 'wrong' : 'missing')
 
-      return { key, vVal: vVal ?? '', oVal: oVal ?? '', status }
+      if (vlmStatus === 'match') vlmCorrect++
+      else vlmWrong++
+
+      if (ocrStatus === 'match') ocrCorrect++
+      else ocrWrong++
+
+      return { key, mVal, vVal, oVal, vlmStatus, ocrStatus }
     })
+
+    const vlmExtra = Object.keys(vlm).filter((k) => !(k in master)).length
+    const ocrExtra = Object.keys(ocr).filter((k) => !(k in master)).length
 
     return {
       rows,
       stats: {
-        total: allKeys.length,
-        match: matchCount,
-        changed: changedCount,
-        vlmOnly: vlmOnlyCount,
-        ocrOnly: ocrOnlyCount,
+        total: masterKeys.length,
+        vlmCorrect,
+        vlmWrong,
+        ocrCorrect,
+        ocrWrong,
+        vlmExtra,
+        ocrExtra,
       },
     }
-  }, [vlmResult, ocrLlmResult])
+  }, [masterXml, vlmXml, ocrXml])
 
-  if (!vlmResult && !ocrLlmResult) {
+  if (!masterXml) {
     return <div className="diff-view"><p style={{ padding: 24, color: 'var(--text-muted)' }}>No results to compare.</p></div>
   }
 
-  const matchPct = stats.total > 0
-    ? ((stats.match / stats.total) * 100).toFixed(1)
+  const vlmPct = stats.total > 0
+    ? ((stats.vlmCorrect / stats.total) * 100).toFixed(1)
+    : '0.0'
+  const ocrPct = stats.total > 0
+    ? ((stats.ocrCorrect / stats.total) * 100).toFixed(1)
     : '0.0'
 
   return (
@@ -126,23 +95,23 @@ export default function DiffView({ vlmResult, ocrLlmResult }) {
         <div className="diff-stats">
           <span className="diff-stat">
             <span className="diff-stat-dot match" />
-            {stats.match} matched ({matchPct}%)
+            VLM: {stats.vlmCorrect} correct / {stats.vlmWrong} wrong ({vlmPct}%)
+          </span>
+          <span className="diff-stat">
+            <span className="diff-stat-dot match" />
+            OCR: {stats.ocrCorrect} correct / {stats.ocrWrong} wrong ({ocrPct}%)
           </span>
           <span className="diff-stat">
             <span className="diff-stat-dot changed" />
-            {stats.changed} different
+            VLM extra: {stats.vlmExtra}
           </span>
           <span className="diff-stat">
-            <span className="diff-stat-dot vlm-only" />
-            {stats.vlmOnly} VLM only
-          </span>
-          <span className="diff-stat">
-            <span className="diff-stat-dot ocr-only" />
-            {stats.ocrOnly} OCR only
+            <span className="diff-stat-dot changed" />
+            OCR extra: {stats.ocrExtra}
           </span>
         </div>
         <div className="diff-legend">
-          {stats.total} total fields (coordinates excluded)
+          {stats.total} master XML datapoints
         </div>
       </div>
 
@@ -150,20 +119,22 @@ export default function DiffView({ vlmResult, ocrLlmResult }) {
         <table className="diff-table">
           <thead>
             <tr>
-              <th style={{ width: '35%' }}>Field Path</th>
-              <th style={{ width: '32.5%' }}>VLM (Vision)</th>
-              <th style={{ width: '32.5%' }}>OCR + LLM</th>
+              <th style={{ width: '30%' }}>Field Path</th>
+              <th style={{ width: '23%' }}>Master XML</th>
+              <th style={{ width: '23%' }}>VLM (Vision)</th>
+              <th style={{ width: '24%' }}>OCR + LLM</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ key, vVal, oVal, status }) => (
-              <tr key={key} className={`diff-row ${status}`}>
+            {rows.map(({ key, mVal, vVal, oVal, vlmStatus, ocrStatus }) => (
+              <tr key={key} className={`diff-row ${vlmStatus !== 'match' || ocrStatus !== 'match' ? 'changed' : 'match'}`}>
                 <td>{key}</td>
+                <td>{mVal || <span className="diff-empty">--</span>}</td>
                 <td>
-                  <DiffCell value={vVal} otherValue={oVal} status={status} />
+                  <DiffCell value={vVal} masterValue={mVal} status={vlmStatus} />
                 </td>
                 <td>
-                  <DiffCell value={oVal} otherValue={vVal} status={status} />
+                  <DiffCell value={oVal} masterValue={mVal} status={ocrStatus} />
                 </td>
               </tr>
             ))}

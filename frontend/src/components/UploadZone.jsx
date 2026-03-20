@@ -2,13 +2,21 @@ import { useState, useRef } from 'react'
 
 export default function UploadZone({ onUpload }) {
   const [isDragOver, setIsDragOver] = useState(false)
-  const inputRef = useRef(null)
+  const certInputRef = useRef(null)
+  const [certFile, setCertFile] = useState(null)
+
+  function maybeUpload(nextCert) {
+    if (nextCert) onUpload(nextCert)
+  }
 
   function handleDrop(e) {
     e.preventDefault()
     setIsDragOver(false)
     const file = e.dataTransfer.files?.[0]
-    if (file) onUpload(file)
+    if (file) {
+      setCertFile(file)
+      maybeUpload(file)
+    }
   }
 
   function handleDragOver(e) {
@@ -21,12 +29,20 @@ export default function UploadZone({ onUpload }) {
   }
 
   function handleClick() {
-    inputRef.current?.click()
+    certInputRef.current?.click()
   }
 
-  function handleChange(e) {
+  function handleCertChange(e) {
     const file = e.target.files?.[0]
-    if (file) onUpload(file)
+    if (!file) return
+    setCertFile(file)
+    maybeUpload(file)
+  }
+
+  function handleRunClick(e) {
+    e.stopPropagation()
+    if (!certFile) return
+    maybeUpload(certFile)
   }
 
   return (
@@ -38,10 +54,10 @@ export default function UploadZone({ onUpload }) {
       onClick={handleClick}
     >
       <input
-        ref={inputRef}
+        ref={certInputRef}
         type="file"
         accept="application/pdf,image/png,image/jpeg,image/tiff"
-        onChange={handleChange}
+        onChange={handleCertChange}
         hidden
       />
 
@@ -56,11 +72,42 @@ export default function UploadZone({ onUpload }) {
         </div>
 
         <p className="upload-text">
-          Drop a certificate here or click to upload
+          Upload certificate to run extraction
         </p>
         <p className="upload-hint">
           Reference Material Certificate for VLM vs OCR+LLM comparison
         </p>
+        <p className="upload-hint" style={{ marginTop: 4 }}>
+          Auto-runs after certificate upload. Upload master XML after extraction to compare.
+        </p>
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+          <button
+            type="button"
+            className="btn-download"
+            onClick={(e) => {
+              e.stopPropagation()
+              certInputRef.current?.click()
+            }}
+          >
+            Upload Certificate
+          </button>
+          <button
+            type="button"
+            className="btn-download"
+            onClick={handleRunClick}
+            disabled={!certFile}
+            style={{ opacity: certFile ? 1 : 0.6, cursor: certFile ? 'pointer' : 'not-allowed' }}
+          >
+            Run Benchmark
+          </button>
+        </div>
+
+        {certFile && (
+          <div style={{ marginTop: 10, color: 'var(--text-muted)', fontSize: 12 }}>
+            {`Certificate: ${certFile.name}`}
+          </div>
+        )}
 
         <div className="upload-formats">
           <span className="format-badge">PDF</span>

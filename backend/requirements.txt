@@ -2,6 +2,4 @@ fastapi
 uvicorn[standard]
 python-multipart
 google-genai
-pymupdf
-pytesseract
-pillow
+docling

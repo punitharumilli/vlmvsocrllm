@@ -1,4 +1,5 @@
 import { flattenObject, computeWordDiff } from './jsonDiff.js'
+import { parseXmlPoints } from './xmlCompare.js'
 
 /**
  * Compute diff rows from two result objects.
@@ -24,6 +25,42 @@ function computeDiffRows(vlmResult, ocrLlmResult) {
   return { rows, stats: { total: allKeys.length, match: matchCount, changed: changedCount, vlmOnly: vlmOnlyCount, ocrOnly: ocrOnlyCount } }
 }
 
+function computeMasterRows(masterXml, vlmXml, ocrXml) {
+  const master = parseXmlPoints(masterXml || '')
+  const vlm = parseXmlPoints(vlmXml || '')
+  const ocr = parseXmlPoints(ocrXml || '')
+
+  const masterKeys = Object.keys(master).sort()
+  let vlmCorrect = 0
+  let vlmWrong = 0
+  let ocrCorrect = 0
+  let ocrWrong = 0
+
+  const rows = masterKeys.map((key) => {
+    const mVal = master[key] ?? ''
+    const vVal = vlm[key] ?? ''
+    const oVal = ocr[key] ?? ''
+    const vlmStatus = vVal === mVal ? 'match' : (vVal ? 'wrong' : 'missing')
+    const ocrStatus = oVal === mVal ? 'match' : (oVal ? 'wrong' : 'missing')
+    if (vlmStatus === 'match') vlmCorrect++
+    else vlmWrong++
+    if (ocrStatus === 'match') ocrCorrect++
+    else ocrWrong++
+    return { key, mVal, vVal, oVal, vlmStatus, ocrStatus }
+  })
+
+  return {
+    rows,
+    stats: {
+      total: masterKeys.length,
+      vlmCorrect,
+      vlmWrong,
+      ocrCorrect,
+      ocrWrong,
+    },
+  }
+}
+
 function escHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
@@ -45,9 +82,57 @@ function wordDiffHtml(thisText, otherText) {
 /**
  * Generate a self-contained HTML report with full styling and diff table.
  */
-export function generateHtmlReport({ fileName, vlmResult, ocrLlmResult, vlmTimeMs, ocrLlmTimeMs, vlmInputTokens, vlmOutputTokens, ocrInputTokens, ocrOutputTokens }) {
-  const { rows, stats } = computeDiffRows(vlmResult, ocrLlmResult)
-  const matchPct = stats.total > 0 ? ((stats.match / stats.total) * 100).toFixed(1) : '0.0'
+export function generateHtmlReport({
+  fileName,
+  vlmResult,
+  ocrLlmResult,
+  vlmTimeMs,
+  ocrLlmTimeMs,
+  vlmInputTokens,
+  vlmOutputTokens,
+  ocrInputTokens,
+  ocrOutputTokens,
+  masterXml = '',
+  vlmXml = '',
+  ocrXml = '',
+  masterScore = null,
+}) {
+
+  const { rows, stats } = masterXml
+    ? computeMasterRows(masterXml, vlmXml, ocrXml)
+    : computeDiffRows(vlmResult, ocrLlmResult)
+
+  const vlmTotalTokens = vlmInputTokens + vlmOutputTokens
+  const ocrTotalTokens = ocrInputTokens + ocrOutputTokens
+
+  const speedWinner = (() => {
+    if (!(vlmTimeMs > 0 && ocrLlmTimeMs > 0)) return '--'
+    if (vlmTimeMs === ocrLlmTimeMs) return 'Tie'
+    if (vlmTimeMs < ocrLlmTimeMs) return `VLM ${(ocrLlmTimeMs / vlmTimeMs).toFixed(1)}x faster`
+    return `OCR ${(vlmTimeMs / ocrLlmTimeMs).toFixed(1)}x faster`
+  })()
+
+  const tokenWinner = (() => {
+    if (!(vlmTotalTokens > 0 && ocrTotalTokens > 0)) return '--'
+    if (vlmTotalTokens === ocrTotalTokens) return 'Tie'
+    if (vlmTotalTokens < ocrTotalTokens) return `VLM ${(ocrTotalTokens / vlmTotalTokens).toFixed(1)}x fewer tokens`
+    return `OCR ${(vlmTotalTokens / ocrTotalTokens).toFixed(1)}x fewer tokens`
+  })()
+
+  const qualityWinner = (() => {
+    const v = masterScore?.vlm
+    const o = masterScore?.ocr_llm
+    if (!v || !o) return 'Upload Master XML to score quality'
+    if (v.accuracy_pct === o.accuracy_pct) return `Tie at ${v.accuracy_pct}%`
+    if (v.accuracy_pct > o.accuracy_pct) return `VLM best (${v.accuracy_pct}% vs ${o.accuracy_pct}%)`
+    return `OCR best (${o.accuracy_pct}% vs ${v.accuracy_pct}%)`
+  })()
+
+  const matchPct = stats.total > 0
+    ? masterXml
+      ? ((stats.vlmCorrect / stats.total) * 100).toFixed(1)
+      : ((stats.match / stats.total) * 100).toFixed(1)
+    : '0.0'
   const date = new Date().toISOString().slice(0, 19).replace('T', ' ')
 
   const statusColors = {
@@ -62,22 +147,34 @@ export function generateHtmlReport({ fileName, vlmResult, ocrLlmResult, vlmTimeM
     'ocr-only': 'border-left:3px solid #ef4444;',
   }
 
-  const tableRows = rows.map(({ key, vVal, oVal, status }) => {
-    const bg = statusColors[status] || ''
-    const bl = borderColors[status] || ''
-    let vCell, oCell
-    if (status === 'changed') {
-      vCell = wordDiffHtml(vVal, oVal)
-      oCell = wordDiffHtml(oVal, vVal)
-    } else if (status === 'vlm-only' || status === 'ocr-only') {
-      vCell = vVal ? `<mark style="background:rgba(250,204,21,0.25);color:#fde047;padding:1px 4px;border-radius:3px">${escHtml(vVal)}</mark>` : '<em style="color:#5c6078">--</em>'
-      oCell = oVal ? `<mark style="background:rgba(250,204,21,0.25);color:#fde047;padding:1px 4px;border-radius:3px">${escHtml(oVal)}</mark>` : '<em style="color:#5c6078">--</em>'
-    } else {
-      vCell = escHtml(vVal)
-      oCell = escHtml(oVal)
-    }
-    return `<tr><td style="${bg}${bl}padding:6px 12px;border-bottom:1px solid #2a2e3f;color:#8b90a5;font-weight:500;white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis">${escHtml(key)}</td><td style="${bg}padding:6px 12px;border-bottom:1px solid #2a2e3f;max-width:400px;word-break:break-word">${vCell}</td><td style="${bg}padding:6px 12px;border-bottom:1px solid #2a2e3f;max-width:400px;word-break:break-word">${oCell}</td></tr>`
-  }).join('\n')
+  const tableRows = masterXml
+    ? rows.map(({ key, mVal, vVal, oVal, vlmStatus, ocrStatus }) => {
+      const rowStatus = (vlmStatus !== 'match' || ocrStatus !== 'match') ? 'changed' : 'match'
+      const bg = statusColors[rowStatus] || ''
+      const vCell = vlmStatus === 'match'
+        ? escHtml(vVal)
+        : (vVal ? wordDiffHtml(vVal, mVal) : '<em style="color:#5c6078">--</em>')
+      const oCell = ocrStatus === 'match'
+        ? escHtml(oVal)
+        : (oVal ? wordDiffHtml(oVal, mVal) : '<em style="color:#5c6078">--</em>')
+      return `<tr><td style="${bg}padding:6px 12px;border-bottom:1px solid #2a2e3f;color:#8b90a5;font-weight:500;white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis">${escHtml(key)}</td><td style="${bg}padding:6px 12px;border-bottom:1px solid #2a2e3f;max-width:280px;word-break:break-word">${escHtml(mVal)}</td><td style="${bg}padding:6px 12px;border-bottom:1px solid #2a2e3f;max-width:280px;word-break:break-word">${vCell}</td><td style="${bg}padding:6px 12px;border-bottom:1px solid #2a2e3f;max-width:280px;word-break:break-word">${oCell}</td></tr>`
+    }).join('\n')
+    : rows.map(({ key, vVal, oVal, status }) => {
+      const bg = statusColors[status] || ''
+      const bl = borderColors[status] || ''
+      let vCell, oCell
+      if (status === 'changed') {
+        vCell = wordDiffHtml(vVal, oVal)
+        oCell = wordDiffHtml(oVal, vVal)
+      } else if (status === 'vlm-only' || status === 'ocr-only') {
+        vCell = vVal ? `<mark style="background:rgba(250,204,21,0.25);color:#fde047;padding:1px 4px;border-radius:3px">${escHtml(vVal)}</mark>` : '<em style="color:#5c6078">--</em>'
+        oCell = oVal ? `<mark style="background:rgba(250,204,21,0.25);color:#fde047;padding:1px 4px;border-radius:3px">${escHtml(oVal)}</mark>` : '<em style="color:#5c6078">--</em>'
+      } else {
+        vCell = escHtml(vVal)
+        oCell = escHtml(oVal)
+      }
+      return `<tr><td style="${bg}${bl}padding:6px 12px;border-bottom:1px solid #2a2e3f;color:#8b90a5;font-weight:500;white-space:nowrap;max-width:300px;overflow:hidden;text-overflow:ellipsis">${escHtml(key)}</td><td style="${bg}padding:6px 12px;border-bottom:1px solid #2a2e3f;max-width:400px;word-break:break-word">${vCell}</td><td style="${bg}padding:6px 12px;border-bottom:1px solid #2a2e3f;max-width:400px;word-break:break-word">${oCell}</td></tr>`
+    }).join('\n')
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -110,18 +207,31 @@ export function generateHtmlReport({ fileName, vlmResult, ocrLlmResult, vlmTimeM
 <h1>VLM vs OCR+LLM Benchmark Report</h1>
 <div class="meta">File: ${escHtml(fileName)} | Date: ${date} | Model: gemini-2.5-flash</div>
 <div class="cards">
+  <div class="card"><div class="card-label">Best Extraction Quality</div><div class="card-value" style="font-size:16px;color:#93c5fd">${escHtml(qualityWinner)}</div></div>
+  <div class="card"><div class="card-label">Speed Winner</div><div class="card-value" style="font-size:16px;color:#93c5fd">${escHtml(speedWinner)}</div></div>
+  <div class="card"><div class="card-label">Token Efficiency</div><div class="card-value" style="font-size:16px;color:#93c5fd">${escHtml(tokenWinner)}</div></div>
+</div>
+<div class="cards">
   <div class="card"><div class="card-label">VLM (Vision) Time</div><div class="card-value vlm">${(vlmTimeMs / 1000).toFixed(1)}s</div><div class="card-tokens">In: ${vlmInputTokens.toLocaleString()} | Out: ${vlmOutputTokens.toLocaleString()}</div></div>
   <div class="card"><div class="card-label">OCR + LLM Time</div><div class="card-value ocr">${(ocrLlmTimeMs / 1000).toFixed(1)}s</div><div class="card-tokens">In: ${ocrInputTokens.toLocaleString()} | Out: ${ocrOutputTokens.toLocaleString()}</div></div>
-  <div class="card"><div class="card-label">Match Rate</div><div class="card-value" style="color:#e4e6f0">${matchPct}%</div><div class="card-tokens">${stats.match} of ${stats.total} fields</div></div>
+  <div class="card"><div class="card-label">Match Rate</div><div class="card-value" style="color:#e4e6f0">${matchPct}%</div><div class="card-tokens">${masterXml ? `${stats.vlmCorrect} of ${stats.total} (VLM)` : `${stats.match} of ${stats.total} fields`}</div></div>
 </div>
 <div class="stats">
-  <span><span class="stat-dot dot-match"></span>${stats.match} matched</span>
+  ${masterXml
+    ? `<span><span class="stat-dot dot-match"></span>VLM ${stats.vlmCorrect} correct / ${stats.vlmWrong} wrong</span>
+  <span><span class="stat-dot dot-match"></span>OCR ${stats.ocrCorrect} correct / ${stats.ocrWrong} wrong</span>
+  <span><span class="stat-dot dot-changed"></span>${stats.total} master datapoints</span>`
+    : `<span><span class="stat-dot dot-match"></span>${stats.match} matched</span>
   <span><span class="stat-dot dot-changed"></span>${stats.changed} different</span>
   <span><span class="stat-dot dot-vlm"></span>${stats.vlmOnly} VLM only</span>
-  <span><span class="stat-dot dot-ocr"></span>${stats.ocrOnly} OCR only</span>
+  <span><span class="stat-dot dot-ocr"></span>${stats.ocrOnly} OCR only</span>`}
 </div>
 <table>
-<thead><tr><th style="width:35%">Field Path</th><th style="width:32.5%">VLM (Vision)</th><th style="width:32.5%">OCR + LLM</th></tr></thead>
+<thead>
+${masterXml
+  ? '<tr><th style="width:30%">Field Path</th><th style="width:23%">Master XML</th><th style="width:23%">VLM (Vision)</th><th style="width:24%">OCR + LLM</th></tr>'
+  : '<tr><th style="width:35%">Field Path</th><th style="width:32.5%">VLM (Vision)</th><th style="width:32.5%">OCR + LLM</th></tr>'}
+</thead>
 <tbody>
 ${tableRows}
 </tbody>
